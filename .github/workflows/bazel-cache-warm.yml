@@ -101,3 +101,71 @@ jobs:
       steps:
          - uses: actions/checkout@v4
          - uses: ./.github/actions/bun-install
+
+   debug_xcode27:
+      name: "Debug xcode-27 thiserror_impl E0463"
+      if: inputs.only == 'debug'
+      runs-on: xcode-27
+      timeout-minutes: 90
+      steps:
+         - uses: actions/checkout@v4
+         - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+         - name: Toolchain facts
+           run: |
+              set -x
+              sw_vers
+              xcode-select -p
+              xcodebuild -version
+              xcrun --show-sdk-path
+              xcrun --find ld
+              xcrun ld -v 2>&1 | head -3
+              xcrun clang --version
+              ls -d /Library/Developer/CommandLineTools /Applications/Xcode*.app || true
+              env | sort | grep -Ei 'sdk|developer|xcode|macosx|^cc=|cflags|ldflags|rust' || true
+         - name: Build natives (fails)
+           id: build
+           continue-on-error: true
+           run: |
+              set -o pipefail
+              if [ "$(ulimit -Sn)" != unlimited ] && [ "$(ulimit -Sn)" -lt 65536 ]; then ulimit -Sn 65536 || true; fi
+              bazelisk build --config=ci --sandbox_debug //:natives-darwin-arm64 2>&1 | tail -80
+         - name: Post-mortem
+           if: always()
+           run: |
+              set -x
+              EXEC=$(bazelisk info --config=ci execution_root 2>/dev/null)
+              OUT=$EXEC/bazel-out/darwin_arm64-opt-exec-ST-752e27cef48a/bin/external
+              R=$OUT/rules_rust++rust+rust_macos_aarch64__aarch64-apple-darwin__nightly_tools/rust_toolchain/bin/rustc
+              "$R" -vV || true
+              bazelisk aquery --config=ci 'mnemonic("Rustc", deps(//:natives-darwin-arm64))' 2>/dev/null \
+                | awk '/rrc__thiserror-impl-1.0.69\/\/:thiserror_impl/{p=1} p&&/^$/{exit} p' | tr ' ' '\n' \
+                | grep -E 'linker|link-arg|crate-type|--target|sysroot' || true
+              ls -la "$OUT/rules_rust++i2+rrc__thiserror-impl-1.0.69/" || true
+              for D in "$OUT"/rules_rust++i2+rrc__thiserror-impl-1.0.69/libthiserror_impl-*.dylib; do
+                file "$D"
+                otool -l "$D" | grep -B3 -A8 -E 'sectname (\.rustc|__rustc)' || echo "NO .rustc SECTION"
+                otool -l "$D" | grep -E 'sectname|segname' | sort | uniq -c
+                nm -gU "$D" | grep -E 'rust_metadata|__rustc_proc_macro_decls' || echo "NO rust_metadata/proc_macro_decls EXPORT"
+                otool -L "$D"
+                cp "$D" /tmp/thiserror_impl.dylib
+              done
+              mkdir -p /tmp/t && cd /tmp/t
+              echo 'pub use thiserror_impl::*;' > use.rs
+              RUSTC_LOG=rustc_metadata=info "$R" --crate-type rlib --edition 2021 use.rs \
+                --extern thiserror_impl=/tmp/thiserror_impl.dylib -o libuse.rlib 2>&1 | tail -40 || true
+              printf '%s\n' 'extern crate proc_macro;' \
+                '#[proc_macro_derive(Foo)] pub fn foo(_: proc_macro::TokenStream) -> proc_macro::TokenStream { Default::default() }' > pm.rs
+              echo 'pub use pm::*;' > usepm.rs
+              for L in "$(xcrun -f clang)" /Library/Developer/CommandLineTools/usr/bin/clang; do
+                [ -x "$L" ] || continue
+                echo "=== plain rustc proc-macro via linker $L"
+                "$R" --crate-type proc-macro --crate-name pm --edition 2021 pm.rs -o libpm.dylib -C linker="$L" &&
+                  { otool -l libpm.dylib | grep -c 'sectname .rustc' || true; nm -gU libpm.dylib | grep -c rust_metadata || true;
+                    "$R" --crate-type rlib --edition 2021 usepm.rs --extern pm=libpm.dylib -o libusepm.rlib && echo "CONSUME OK"; }
+              done
+         - uses: actions/upload-artifact@v4
+           if: always()
+           with:
+              name: thiserror-impl-dylib
+              path: /tmp/thiserror_impl.dylib
+              if-no-files-found: warn
