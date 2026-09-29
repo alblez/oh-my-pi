@@ -32,15 +32,20 @@ build --@rules_rust//rust/settings:error_format=human
 # Generated toolchains carry target_settings requiring the nightly channel.
 build --@rules_rust//rust/toolchain/channel=nightly
 
-# Pin the macOS deployment target for target and exec (proc-macro/build-script)
-# links. Unset, the autodetected cc toolchain uses the selected SDK version:
-# 10.11 under Command Line Tools but 27.0 under full Xcode 27 (xcode-27
-# runners). Besides locking the addon to macOS 27+, minos 27.0 plus rustc's
-# `-C strip=debuginfo` (Apple strip 27) emits dylibs dyld rejects with
-# "mis-aligned LINKEDIT string pool", which rustc reports as E0463 for every
-# proc-macro. 12.0 matches the Foundation Models bridge's Swift target.
+# Pin the macOS deployment target for target and exec links. Unset, the
+# autodetected cc toolchain uses the selected SDK version: 10.11 under Command
+# Line Tools but 27.0 under full Xcode 27 (xcode-27 runners), which would lock
+# the addon to macOS 27+. 12.0 matches the Foundation Models bridge's Swift
+# target.
 build:macos --macos_minimum_os=12.0
 build:macos --host_macos_minimum_os=12.0
+# From minos 12.0 the Xcode 27 linker emits chained fixups, and rustc's
+# `-C strip=debuginfo` pass then leaves dylibs dyld rejects ("mis-aligned
+# LINKEDIT string pool"); rustc reports that for every proc-macro as E0463
+# "can't find crate". Classic dyld info avoids it. Exec links (proc-macros,
+# build scripts) take it here; the addon takes it in
+# //crates/pi-natives:pi_natives.
+build:macos --host_linkopt=-Wl,-no_fixup_chains
 
 
 # --- Rust validation (replaces cargo clippy/nextest in CI) --------------------

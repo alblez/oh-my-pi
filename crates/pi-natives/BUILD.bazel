@@ -116,7 +116,11 @@ rust_shared_library(
         # keeps the addon resident across Worker teardown on linux-gnu (napi
         # emits it for gnu; harmless under musl's loader). windows-msvc needs
         # nothing — napi-sys v3 imports node.exe via raw-dylib.
-        "@platforms//os:macos": ["-Clink-arg=-Wl,-undefined,dynamic_lookup"],
+        # -no_fixup_chains: see the macos block in //:.bazelrc.
+        "@platforms//os:macos": [
+            "-Clink-arg=-Wl,-undefined,dynamic_lookup",
+            "-Clink-arg=-Wl,-no_fixup_chains",
+        ],
         "@platforms//os:linux": ["-Clink-arg=-Wl,-z,nodelete"],
         "//conditions:default": [],
     }) + select({
