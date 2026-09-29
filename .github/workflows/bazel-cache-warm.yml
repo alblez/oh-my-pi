@@ -129,6 +129,17 @@ jobs:
               set -o pipefail
               if [ "$(ulimit -Sn)" != unlimited ] && [ "$(ulimit -Sn)" -lt 65536 ]; then ulimit -Sn 65536 || true; fi
               bazelisk build --config=ci --sandbox_debug //:natives-darwin-arm64 2>&1 | tail -80
+         - name: Verify addon
+           if: steps.build.outcome == 'success'
+           run: |
+              set -x
+              for N in $(bazelisk cquery --config=ci --output=files //:natives-darwin-arm64 2>/dev/null); do
+                file "$N"
+                otool -l "$N" | grep -A4 LC_BUILD_VERSION
+                otool -L "$N" | grep -F FoundationModels.framework
+                cp "$N" /tmp/addon.node
+                node -e 'const m=require("/tmp/addon.node"); console.log("addon loaded, exports:", Object.keys(m).length)'
+              done
          - name: Post-mortem
            if: always()
            run: |
